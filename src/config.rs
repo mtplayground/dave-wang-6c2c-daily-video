@@ -48,6 +48,7 @@ pub struct ObjectStorageConfig {
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
     pub video_provider: String,
+    pub image_to_3d_provider: String,
     pub gemini_api_key: String,
     pub meshy_api_key: String,
 }
@@ -171,6 +172,8 @@ impl Config {
         };
         let video_provider =
             optional_var("VIDEO_PROVIDER").unwrap_or_else(|| "gemini_veo".to_owned());
+        let image_to_3d_provider =
+            optional_var("IMAGE_TO_3D_PROVIDER").unwrap_or_else(|| "meshy".to_owned());
 
         if !object_storage_prefix.ends_with('/') {
             return Err(ConfigError::InvalidVar {
@@ -200,6 +203,7 @@ impl Config {
             },
             providers: ProviderConfig {
                 video_provider,
+                image_to_3d_provider,
                 gemini_api_key,
                 meshy_api_key,
             },
