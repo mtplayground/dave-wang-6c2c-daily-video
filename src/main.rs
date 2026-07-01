@@ -7,6 +7,9 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 
 mod config;
 mod db;
+mod models {
+    pub mod run;
+}
 mod routes {
     pub mod health;
 }
