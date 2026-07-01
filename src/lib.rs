@@ -2,6 +2,7 @@ pub mod config;
 pub mod db;
 pub mod media;
 pub mod models;
+pub mod pipeline;
 pub mod providers;
 pub mod repo;
 pub mod routes;
