@@ -6,6 +6,7 @@ use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
+mod db;
 mod routes {
     pub mod health;
 }
@@ -15,6 +16,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     init_tracing();
 
     let config = config::Config::from_env()?;
+    let _db_pool = db::connect_and_migrate(&config.database).await?;
     let app = Router::new().route("/health", get(routes::health::health_check));
     let addr = config.server.socket_addr();
     let listener = TcpListener::bind(addr).await?;
