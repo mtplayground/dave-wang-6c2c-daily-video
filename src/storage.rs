@@ -153,6 +153,31 @@ impl ObjectStorage {
         Ok(presigned.uri().to_string())
     }
 
+    pub async fn public_url_for_storage_key(
+        &self,
+        storage_key: impl AsRef<str>,
+        expires_in: Duration,
+    ) -> Result<String, StorageError> {
+        if expires_in > MAX_PRESIGNED_URL_TTL {
+            return Err(StorageError::InvalidPresignedUrlTtl(expires_in));
+        }
+
+        let storage_key = self.validate_storage_key(storage_key.as_ref())?;
+        let presigning_config = PresigningConfig::expires_in(expires_in)
+            .map_err(|err| StorageError::Presign(Box::new(err)))?;
+
+        let presigned = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&storage_key)
+            .presigned(presigning_config)
+            .await
+            .map_err(|err| StorageError::Presign(Box::new(err)))?;
+
+        Ok(presigned.uri().to_string())
+    }
+
     pub fn artifact_key(
         &self,
         kind: ArtifactKind,
@@ -173,6 +198,36 @@ impl ObjectStorage {
         }
 
         Ok(format!("{}{}", self.prefix, relative_key))
+    }
+
+    fn validate_storage_key(&self, storage_key: &str) -> Result<String, StorageError> {
+        let storage_key = storage_key.trim();
+        if storage_key.is_empty() {
+            return Err(StorageError::InvalidKey {
+                key: storage_key.to_owned(),
+                reason: "key must not be empty",
+            });
+        }
+        if storage_key.starts_with('/') {
+            return Err(StorageError::InvalidKey {
+                key: storage_key.to_owned(),
+                reason: "key must not start with a slash",
+            });
+        }
+        if storage_key.contains("..") {
+            return Err(StorageError::InvalidKey {
+                key: storage_key.to_owned(),
+                reason: "key must not contain parent directory traversal",
+            });
+        }
+        if !storage_key.starts_with(&self.prefix) {
+            return Err(StorageError::InvalidKey {
+                key: storage_key.to_owned(),
+                reason: "stored key must start with OBJECT_STORAGE_PREFIX",
+            });
+        }
+
+        Ok(storage_key.to_owned())
     }
 }
 
