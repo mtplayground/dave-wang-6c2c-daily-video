@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use async_trait::async_trait;
 use chrono::NaiveDate;
 use tokio::time::sleep;
 use uuid::Uuid;
@@ -19,7 +20,7 @@ use crate::{
     },
     models::{
         artifact::ArtifactType,
-        rotation::RotationAnimal,
+        rotation::{RotationAnimal, RotationState},
         run::{PipelineStep, PipelineStepStatus, Run, RunStatus},
         video::PublishedVideo,
     },
@@ -39,17 +40,196 @@ use crate::{
 
 const SIGNED_FRAME_URL_TTL: Duration = Duration::from_secs(60 * 60);
 
+#[async_trait]
+pub trait ArtifactStorage: Send + Sync {
+    async fn upload_artifact(
+        &self,
+        relative_key: String,
+        bytes: Vec<u8>,
+        content_type: Option<&str>,
+    ) -> Result<crate::storage::StoredObject, StorageError>;
+
+    async fn public_url(
+        &self,
+        relative_key: &str,
+        expires_in: Duration,
+    ) -> Result<String, StorageError>;
+
+    fn artifact_key(
+        &self,
+        kind: ArtifactKind,
+        run_id: Uuid,
+        file_name: &str,
+    ) -> Result<String, StorageError>;
+}
+
+#[async_trait]
+impl ArtifactStorage for ObjectStorage {
+    async fn upload_artifact(
+        &self,
+        relative_key: String,
+        bytes: Vec<u8>,
+        content_type: Option<&str>,
+    ) -> Result<crate::storage::StoredObject, StorageError> {
+        ObjectStorage::upload_artifact(self, relative_key, bytes, content_type).await
+    }
+
+    async fn public_url(
+        &self,
+        relative_key: &str,
+        expires_in: Duration,
+    ) -> Result<String, StorageError> {
+        ObjectStorage::public_url(self, relative_key, expires_in).await
+    }
+
+    fn artifact_key(
+        &self,
+        kind: ArtifactKind,
+        run_id: Uuid,
+        file_name: &str,
+    ) -> Result<String, StorageError> {
+        ObjectStorage::artifact_key(self, kind, run_id, file_name)
+    }
+}
+
+#[async_trait]
+pub trait PipelineMedia: Send + Sync {
+    async fn extract_frame(&self, input: &Path, output: &Path) -> Result<String, PipelineError>;
+
+    async fn render_reveal(&self, input: &Path, output: &Path) -> Result<String, PipelineError>;
+
+    async fn assemble_final_video(
+        &self,
+        funny_video: &Path,
+        reveal_clip: &Path,
+        output: &Path,
+    ) -> Result<(), PipelineError>;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FfmpegPipelineMedia {
+    frame_options: FrameExtractionOptions,
+    render_options: TurntableRenderOptions,
+    assembly_options: AssemblyOptions,
+}
+
+#[async_trait]
+impl PipelineMedia for FfmpegPipelineMedia {
+    async fn extract_frame(&self, input: &Path, output: &Path) -> Result<String, PipelineError> {
+        let frame = extract_representative_frame_with_options(input, output, &self.frame_options)?;
+        Ok(frame.content_type.to_owned())
+    }
+
+    async fn render_reveal(&self, input: &Path, output: &Path) -> Result<String, PipelineError> {
+        let clip = render_glb_turntable_with_options(input, output, &self.render_options)?;
+        Ok(clip.content_type.to_owned())
+    }
+
+    async fn assemble_final_video(
+        &self,
+        funny_video: &Path,
+        reveal_clip: &Path,
+        output: &Path,
+    ) -> Result<(), PipelineError> {
+        assemble_final_mp4_with_options(
+            funny_video,
+            reveal_clip,
+            output,
+            &self.assembly_options,
+        )?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait RunRepository: Send + Sync {
+    async fn advance_rotation(&self) -> Result<RotationState, RepoError>;
+
+    async fn create_run(&self, date: NaiveDate, animal: &str) -> Result<Run, RepoError>;
+
+    async fn get_run(&self, id: Uuid) -> Result<Option<Run>, RepoError>;
+
+    async fn update_run_status(
+        &self,
+        id: Uuid,
+        current_status: RunStatus,
+        update: RunStatusUpdate,
+        error: Option<&str>,
+    ) -> Result<Run, RepoError>;
+
+    async fn upsert_step_state(
+        &self,
+        run_id: Uuid,
+        step: PipelineStep,
+        status: PipelineStepStatus,
+        error: Option<&str>,
+    ) -> Result<(), RepoError>;
+
+    async fn record_artifact(&self, artifact: NewArtifact<'_>) -> Result<(), RepoError>;
+
+    async fn record_published_video(
+        &self,
+        video: NewPublishedVideo<'_>,
+    ) -> Result<PublishedVideo, RepoError>;
+}
+
+#[async_trait]
+impl RunRepository for Repository {
+    async fn advance_rotation(&self) -> Result<RotationState, RepoError> {
+        Repository::advance_rotation(self).await
+    }
+
+    async fn create_run(&self, date: NaiveDate, animal: &str) -> Result<Run, RepoError> {
+        Repository::create_run(self, date, animal).await
+    }
+
+    async fn get_run(&self, id: Uuid) -> Result<Option<Run>, RepoError> {
+        Repository::get_run(self, id).await
+    }
+
+    async fn update_run_status(
+        &self,
+        id: Uuid,
+        current_status: RunStatus,
+        update: RunStatusUpdate,
+        error: Option<&str>,
+    ) -> Result<Run, RepoError> {
+        Repository::update_run_status(self, id, current_status, update, error).await
+    }
+
+    async fn upsert_step_state(
+        &self,
+        run_id: Uuid,
+        step: PipelineStep,
+        status: PipelineStepStatus,
+        error: Option<&str>,
+    ) -> Result<(), RepoError> {
+        Repository::upsert_step_state(self, run_id, step, status, error)
+            .await
+            .map(|_| ())
+    }
+
+    async fn record_artifact(&self, artifact: NewArtifact<'_>) -> Result<(), RepoError> {
+        Repository::record_artifact(self, artifact).await.map(|_| ())
+    }
+
+    async fn record_published_video(
+        &self,
+        video: NewPublishedVideo<'_>,
+    ) -> Result<PublishedVideo, RepoError> {
+        Repository::record_published_video(self, video).await
+    }
+}
+
 #[derive(Clone)]
 pub struct Pipeline {
-    repo: Repository,
-    storage: ObjectStorage,
+    repo: Arc<dyn RunRepository>,
+    storage: Arc<dyn ArtifactStorage>,
+    media: Arc<dyn PipelineMedia>,
     video_provider: Arc<dyn VideoProvider>,
     image_to_3d_provider: Arc<dyn ImageTo3DProvider>,
     workspace_dir: PathBuf,
     poll_options: PipelinePollOptions,
-    frame_options: FrameExtractionOptions,
-    render_options: TurntableRenderOptions,
-    assembly_options: AssemblyOptions,
 }
 
 impl Pipeline {
@@ -61,15 +241,32 @@ impl Pipeline {
         workspace_dir: impl Into<PathBuf>,
     ) -> Self {
         Self {
-            repo,
-            storage,
+            repo: Arc::new(repo),
+            storage: Arc::new(storage),
+            media: Arc::new(FfmpegPipelineMedia::default()),
             video_provider,
             image_to_3d_provider,
             workspace_dir: workspace_dir.into(),
             poll_options: PipelinePollOptions::default(),
-            frame_options: FrameExtractionOptions::default(),
-            render_options: TurntableRenderOptions::default(),
-            assembly_options: AssemblyOptions::default(),
+        }
+    }
+
+    pub fn with_components(
+        repo: Arc<dyn RunRepository>,
+        storage: Arc<dyn ArtifactStorage>,
+        media: Arc<dyn PipelineMedia>,
+        video_provider: Arc<dyn VideoProvider>,
+        image_to_3d_provider: Arc<dyn ImageTo3DProvider>,
+        workspace_dir: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            repo,
+            storage,
+            media,
+            video_provider,
+            image_to_3d_provider,
+            workspace_dir: workspace_dir.into(),
+            poll_options: PipelinePollOptions::default(),
         }
     }
 
@@ -84,9 +281,11 @@ impl Pipeline {
         render_options: TurntableRenderOptions,
         assembly_options: AssemblyOptions,
     ) -> Self {
-        self.frame_options = frame_options;
-        self.render_options = render_options;
-        self.assembly_options = assembly_options;
+        self.media = Arc::new(FfmpegPipelineMedia {
+            frame_options,
+            render_options,
+            assembly_options,
+        });
         self
     }
 
@@ -268,11 +467,10 @@ impl Pipeline {
     async fn extract_frame(&self, run: &Run, context: &mut PipelineContext) -> Result<(), PipelineError> {
         ensure_file_exists(&context.paths.raw_video, PipelineStep::ExtractFrame)?;
 
-        let frame = extract_representative_frame_with_options(
+        let content_type = self.media.extract_frame(
             &context.paths.raw_video,
             &context.paths.frame,
-            &self.frame_options,
-        )?;
+        ).await?;
         let bytes = fs::read(&context.paths.frame)?;
         let artifact = self
             .upload_artifact(
@@ -281,7 +479,7 @@ impl Pipeline {
                 ArtifactType::Frame,
                 "frame.jpg",
                 bytes,
-                Some(&frame.content_type),
+                Some(&content_type),
             )
             .await?;
 
@@ -379,11 +577,10 @@ impl Pipeline {
     async fn render_reveal(&self, run: &Run, context: &mut PipelineContext) -> Result<(), PipelineError> {
         ensure_file_exists(&context.paths.glb, PipelineStep::RenderReveal)?;
 
-        let clip = render_glb_turntable_with_options(
+        let content_type = self.media.render_reveal(
             &context.paths.glb,
             &context.paths.reveal_clip,
-            &self.render_options,
-        )?;
+        ).await?;
         let bytes = fs::read(&context.paths.reveal_clip)?;
         let artifact = self
             .upload_artifact(
@@ -392,7 +589,7 @@ impl Pipeline {
                 ArtifactType::RevealClip,
                 "reveal.mp4",
                 bytes,
-                Some(&clip.content_type),
+                Some(&content_type),
             )
             .await?;
 
@@ -404,12 +601,11 @@ impl Pipeline {
         ensure_file_exists(&context.paths.raw_video, PipelineStep::Assemble)?;
         ensure_file_exists(&context.paths.reveal_clip, PipelineStep::Assemble)?;
 
-        assemble_final_mp4_with_options(
+        self.media.assemble_final_video(
             &context.paths.raw_video,
             &context.paths.reveal_clip,
             &context.paths.final_mp4,
-            &self.assembly_options,
-        )?;
+        ).await?;
 
         Ok(())
     }
