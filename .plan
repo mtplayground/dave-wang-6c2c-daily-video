@@ -1,0 +1,70 @@
+# Architecture Plan
+
+Product/repo: dave-wang-6c2c-daily-video
+
+## Module Structure
+
+- `src/main.rs`: process entry point, tracing initialization, config load, DB pool/migrations, storage/provider construction, Axum router, scheduler startup, graceful shutdown.
+- `src/config.rs`: environment loader for database, object storage, provider API keys, scheduler settings, bind address, admin key, public URL/CORS origin. Missing required values fail fast.
+- `src/error.rs`: shared application error type, provider/media/repo error mapping, API response conversion, structured error context for failed runs.
+- `src/db/mod.rs`: sqlx PostgreSQL pool creation and startup migration runner.
+- `migrations/`: schema for runs, pipeline steps, rotation state, artifacts, and published videos.
+- `src/models/`: persisted domain records and enums:
+  - `run.rs`: run status, pipeline step, per-step state.
+  - `rotation.rs`: deterministic animal rotation state.
+  - `artifact.rs`: raw video, frame, GLB, reveal clip, final MP4 artifacts.
+  - `video.rs`: published video feed records.
+- `src/repo/`: database repository layer that owns run lifecycle, step transitions, artifact writes, rotation advancement, and published-video queries.
+- `src/routes/`: HTTP API modules:
+  - `health.rs`: `GET /health`.
+  - `videos.rs`: public `GET /videos` and `GET /videos/latest`.
+  - `admin.rs`: API-key protected manual run and retry endpoints.
+- `src/middleware/auth.rs`: admin API-key validation.
+- `src/storage.rs`: S3-compatible object storage wrapper for upload, exists, and public URL generation.
+- `src/providers/video/`: `VideoProvider` trait, prompt builder, Gemini/Veo adapter.
+- `src/providers/image_to_3d/`: `ImageTo3DProvider` trait and Meshy adapter.
+- `src/media/`: local media steps:
+  - `frame.rs`: ffmpeg still-frame extraction.
+  - `render.rs`: headless GLB turntable / print-reveal rendering.
+  - `assemble.rs`: ffmpeg concat/mux for final MP4.
+- `src/pipeline/mod.rs`: resumable orchestrator for the full daily workflow.
+- `src/scheduler.rs`: once-daily scheduler with duplicate-date guard.
+- `tests/`: integration/unit tests for repo behavior, providers with mocked HTTP, media assembly, orchestrator behavior, and end-to-end pipeline with stubs.
+
+## Issue Dependencies
+
+1. Scaffold Axum and health check is the foundation.
+2. Config loader follows the scaffold and unblocks DB, storage, providers, scheduler, and admin auth.
+3. PostgreSQL setup depends on config and unblocks all migrations and repositories.
+4. Object storage depends on config and is required by the pipeline and media artifact tests.
+5. Runs and step-state schema depends on DB setup and is the core resumability contract.
+6. Rotation schema depends on DB setup and feeds animal selection.
+7. Artifact and published-video schema depends on DB setup and backs storage tracking plus the public feed.
+8. Repository layer depends on the config/DB/model issues and should consolidate SQL access before orchestration work.
+9. Video provider trait depends on service scaffolding/config and establishes the provider boundary.
+10. Gemini/Veo adapter depends on provider trait/config.
+11. Image-to-3D trait and Meshy adapter depends on config and should mirror the video provider testing pattern.
+12. Freeze-frame extraction depends on media binary assumptions from the service scaffold/deployment plan.
+13. GLB reveal rendering depends on media/headless-render assumptions.
+14. Final concat/mux depends on storage/media artifact conventions.
+15. Resumable pipeline depends on config, DB/repo, storage, providers, and media steps.
+16. Scheduler depends on the orchestrator/repo run guard.
+17. Orchestrator tests depend on the orchestrator and model contracts.
+18. Public videos feed depends on published-video repository support.
+19. Admin trigger/retry depends on run state, routing, and auth middleware.
+20. End-to-end test depends on core persistence, rotation, pipeline, storage, and provider abstractions.
+21. Error/logging review depends on run/step failure semantics and should be revisited once providers and orchestration exist.
+22. Deployment preparation depends on the final environment, binaries, and operational requirements being known.
+
+## Key Design Decisions
+
+- Build as a plain Rust Axum service, not a frontend/full-stack app. Use `cargo build` as the normal build path.
+- Keep provider integrations behind async traits so pipeline tests can use deterministic stubs and adapters can use mocked HTTP clients.
+- Treat the database as the source of truth for run state, step completion, rotation position, artifacts, and published feed records.
+- Persist after every pipeline step. A retry should inspect current run/step state and resume from the first incomplete or failed step without repeating completed external work when artifacts already exist.
+- Use idempotent storage keys derived from run date, animal, run id, and artifact type so retries can check object existence before re-uploading.
+- Keep media processing in small modules with command wrappers that return typed errors and expose enough arguments for tests with fixtures.
+- Use structured logging spans around runs, steps, provider calls, storage uploads, and media commands. Store concise failure information on runs and detailed context in logs.
+- Schedule execution inside the service process, guarded by a database uniqueness constraint on run date so restarts or duplicate timers cannot publish twice for a day.
+- Admin endpoints require a configured API key and should only enqueue/execute through the same orchestrator path used by the scheduler.
+- Public video endpoints are read-only JSON APIs intended for little6.co; pagination should be stable and newest-first.
