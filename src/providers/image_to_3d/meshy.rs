@@ -9,7 +9,9 @@ use std::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
+use tracing::{error, warn};
 
+use crate::error::provider_http_category;
 use super::{
     GlbModel, ImageTo3DJob, ImageTo3DJobStatus, ImageTo3DProvider, ImageTo3DProviderError,
     ImageTo3DProviderKind, ImageTo3DRequest,
@@ -98,21 +100,56 @@ impl MeshyImageTo3DProvider {
                 Ok(response)
                     if response.is_transient() && attempts < self.retry_policy.max_attempts =>
                 {
+                    warn!(
+                        provider = "meshy",
+                        context = %context.as_str(),
+                        attempt = attempts,
+                        status = response.status,
+                        category = %provider_http_category(response.status),
+                        "transient image-to-3d provider HTTP response; retrying"
+                    );
                     sleep(delay).await;
                     delay = self.retry_policy.next_delay(delay);
                 }
                 Ok(response) => {
+                    let category = provider_http_category(response.status);
+                    error!(
+                        provider = "meshy",
+                        context = %context.as_str(),
+                        attempts,
+                        status = response.status,
+                        category = %category,
+                        "image-to-3d provider HTTP request failed"
+                    );
                     return Err(context.error(format!(
-                        "Meshy returned HTTP {}: {}",
+                        "[{category}] Meshy returned HTTP {}: {}",
                         response.status,
                         response.text_lossy()
                     )));
                 }
                 Err(error) if error.transient && attempts < self.retry_policy.max_attempts => {
+                    warn!(
+                        provider = "meshy",
+                        context = %context.as_str(),
+                        attempt = attempts,
+                        error = %error,
+                        category = "provider_transient",
+                        "transient image-to-3d provider transport error; retrying"
+                    );
                     sleep(delay).await;
                     delay = self.retry_policy.next_delay(delay);
                 }
-                Err(error) => return Err(context.error(error.to_string())),
+                Err(error) => {
+                    error!(
+                        provider = "meshy",
+                        context = %context.as_str(),
+                        attempts,
+                        error = %error,
+                        category = "provider_transient",
+                        "image-to-3d provider transport request failed"
+                    );
+                    return Err(context.error(format!("[provider_transient] {error}")));
+                }
             }
         }
     }
@@ -449,6 +486,14 @@ enum ErrorContext {
 }
 
 impl ErrorContext {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Submit => "submit",
+            Self::Poll => "poll",
+            Self::Download => "download",
+        }
+    }
+
     fn error(self, message: String) -> ImageTo3DProviderError {
         match self {
             Self::Submit => ImageTo3DProviderError::SubmitFailed { message },
