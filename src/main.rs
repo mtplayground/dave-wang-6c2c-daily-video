@@ -10,6 +10,7 @@ mod db;
 mod routes {
     pub mod health;
 }
+mod storage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
