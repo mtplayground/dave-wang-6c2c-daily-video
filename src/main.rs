@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use axum::{Router, routing::get};
-use dave_wang_6c2c_daily_video::{config, db, routes};
+use dave_wang_6c2c_daily_video::{config, db, repo::Repository, routes, storage::ObjectStorage};
 use tokio::{net::TcpListener, signal};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -11,8 +11,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     init_tracing();
 
     let config = config::Config::from_env()?;
-    let _db_pool = db::connect_and_migrate(&config.database).await?;
-    let app = Router::new().route("/health", get(routes::health::health_check));
+    let db_pool = db::connect_and_migrate(&config.database).await?;
+    let videos_state = routes::videos::VideosState::new(
+        Repository::new(db_pool.clone()),
+        ObjectStorage::new(&config.object_storage),
+    );
+    let app = Router::new()
+        .route("/health", get(routes::health::health_check))
+        .route("/videos", get(routes::videos::list_videos))
+        .route("/videos/latest", get(routes::videos::latest_video))
+        .with_state(videos_state);
     let addr = config.server.socket_addr();
     let listener = TcpListener::bind(addr).await?;
 
