@@ -8,8 +8,10 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 mod config;
 mod db;
 mod models {
+    pub mod artifact;
     pub mod rotation;
     pub mod run;
+    pub mod video;
 }
 mod routes {
     pub mod health;
