@@ -49,8 +49,8 @@ pub struct ObjectStorageConfig {
 pub struct ProviderConfig {
     pub video_provider: String,
     pub image_to_3d_provider: String,
-    pub gemini_api_key: String,
-    pub meshy_api_key: String,
+    pub gemini_api_key: Option<String>,
+    pub meshy_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,8 +89,8 @@ impl Config {
         let object_storage_region = required_var("OBJECT_STORAGE_REGION", &mut missing);
         let object_storage_force_path_style =
             required_var("OBJECT_STORAGE_FORCE_PATH_STYLE", &mut missing);
-        let gemini_api_key = required_var("GEMINI_API_KEY", &mut missing);
-        let meshy_api_key = required_var("MESHY_API_KEY", &mut missing);
+        let gemini_api_key = optional_var("GEMINI_API_KEY");
+        let meshy_api_key = optional_var("MESHY_API_KEY");
         let schedule_time = required_var("SCHEDULE_TIME", &mut missing);
         let schedule_timezone = required_var("SCHEDULE_TIMEZONE", &mut missing);
         let admin_api_key = required_var("ADMIN_API_KEY", &mut missing);
@@ -108,8 +108,6 @@ impl Config {
             object_storage_endpoint,
             object_storage_region,
             object_storage_force_path_style,
-            gemini_api_key,
-            meshy_api_key,
             schedule_time,
             schedule_timezone,
             admin_api_key,
@@ -122,8 +120,6 @@ impl Config {
             object_storage_endpoint,
             object_storage_region,
             object_storage_force_path_style,
-            gemini_api_key,
-            meshy_api_key,
             schedule_time,
             schedule_timezone,
             admin_api_key,
@@ -137,8 +133,6 @@ impl Config {
                 Some(object_storage_endpoint),
                 Some(object_storage_region),
                 Some(object_storage_force_path_style),
-                Some(gemini_api_key),
-                Some(meshy_api_key),
                 Some(schedule_time),
                 Some(schedule_timezone),
                 Some(admin_api_key),
@@ -151,8 +145,6 @@ impl Config {
                 object_storage_endpoint,
                 object_storage_region,
                 object_storage_force_path_style,
-                gemini_api_key,
-                meshy_api_key,
                 schedule_time,
                 schedule_timezone,
                 admin_api_key,

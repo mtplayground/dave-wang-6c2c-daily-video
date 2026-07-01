@@ -33,6 +33,46 @@ pub trait ImageTo3DProvider: Send + Sync {
     async fn download_glb(&self, job: &ImageTo3DJob) -> Result<GlbModel, ImageTo3DProviderError>;
 }
 
+#[derive(Debug, Clone)]
+pub struct UnavailableImageTo3DProvider {
+    message: String,
+}
+
+impl UnavailableImageTo3DProvider {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl ImageTo3DProvider for UnavailableImageTo3DProvider {
+    async fn submit_image(
+        &self,
+        _request: ImageTo3DRequest,
+    ) -> Result<ImageTo3DJob, ImageTo3DProviderError> {
+        Err(ImageTo3DProviderError::SubmitFailed {
+            message: self.message.clone(),
+        })
+    }
+
+    async fn poll_job(
+        &self,
+        _job: &ImageTo3DJob,
+    ) -> Result<ImageTo3DJobStatus, ImageTo3DProviderError> {
+        Err(ImageTo3DProviderError::PollFailed {
+            message: self.message.clone(),
+        })
+    }
+
+    async fn download_glb(&self, _job: &ImageTo3DJob) -> Result<GlbModel, ImageTo3DProviderError> {
+        Err(ImageTo3DProviderError::DownloadFailed {
+            message: self.message.clone(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageTo3DRequest {
     pub image_url: String,

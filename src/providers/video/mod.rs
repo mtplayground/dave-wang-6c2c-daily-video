@@ -31,6 +31,43 @@ pub trait VideoProvider: Send + Sync {
     async fn download_clip(&self, job: &VideoJob) -> Result<VideoClip, VideoProviderError>;
 }
 
+#[derive(Debug, Clone)]
+pub struct UnavailableVideoProvider {
+    message: String,
+}
+
+impl UnavailableVideoProvider {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl VideoProvider for UnavailableVideoProvider {
+    async fn submit_prompt(
+        &self,
+        _request: VideoGenerationRequest,
+    ) -> Result<VideoJob, VideoProviderError> {
+        Err(VideoProviderError::SubmitFailed {
+            message: self.message.clone(),
+        })
+    }
+
+    async fn poll_job(&self, _job: &VideoJob) -> Result<VideoJobStatus, VideoProviderError> {
+        Err(VideoProviderError::PollFailed {
+            message: self.message.clone(),
+        })
+    }
+
+    async fn download_clip(&self, _job: &VideoJob) -> Result<VideoClip, VideoProviderError> {
+        Err(VideoProviderError::DownloadFailed {
+            message: self.message.clone(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoGenerationRequest {
     pub prompt: VideoPrompt,

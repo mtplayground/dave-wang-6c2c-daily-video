@@ -40,7 +40,12 @@ impl MeshyImageTo3DProvider {
 
     pub fn from_config(config: &ProviderConfig) -> Result<Self, ImageTo3DProviderError> {
         ImageTo3DProviderKind::from_config(config)?;
-        Ok(Self::new(config.meshy_api_key.clone()))
+        match config.meshy_api_key.clone() {
+            Some(api_key) => Ok(Self::new(api_key)),
+            None => Err(ImageTo3DProviderError::InvalidProvider {
+                name: "meshy requires MESHY_API_KEY".to_owned(),
+            }),
+        }
     }
 
     pub fn with_options(

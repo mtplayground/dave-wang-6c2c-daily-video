@@ -10,8 +10,11 @@ use dave_wang_6c2c_daily_video::{
     middleware::auth::{AdminApiKey, require_admin_api_key},
     pipeline::Pipeline,
     providers::{
-        image_to_3d::{ImageTo3DProviderKind, MeshyImageTo3DProvider},
-        video::{VeoVideoProvider, VideoProviderKind},
+        image_to_3d::{
+            ImageTo3DProvider, ImageTo3DProviderKind, MeshyImageTo3DProvider,
+            UnavailableImageTo3DProvider,
+        },
+        video::{UnavailableVideoProvider, VeoVideoProvider, VideoProvider, VideoProviderKind},
     },
     repo::Repository,
     routes,
@@ -29,15 +32,22 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let db_pool = db::connect_and_migrate(&config.database).await?;
     let repository = Repository::new(db_pool.clone());
     let object_storage = ObjectStorage::new(&config.object_storage);
-    let video_provider = match VideoProviderKind::from_config(&config.providers)? {
-        VideoProviderKind::GeminiVeo => Arc::new(VeoVideoProvider::new(
-            config.providers.gemini_api_key.clone(),
-        )),
+    let video_provider: Arc<dyn VideoProvider> = match VideoProviderKind::from_config(&config.providers)? {
+        VideoProviderKind::GeminiVeo => match config.providers.gemini_api_key.clone() {
+            Some(api_key) => Arc::new(VeoVideoProvider::new(api_key)),
+            None => Arc::new(UnavailableVideoProvider::new(
+                "GEMINI_API_KEY is not configured; video generation is unavailable",
+            )),
+        },
     };
-    let image_to_3d_provider = match ImageTo3DProviderKind::from_config(&config.providers)? {
-        ImageTo3DProviderKind::Meshy => Arc::new(MeshyImageTo3DProvider::new(
-            config.providers.meshy_api_key.clone(),
-        )),
+    let image_to_3d_provider: Arc<dyn ImageTo3DProvider> =
+        match ImageTo3DProviderKind::from_config(&config.providers)? {
+        ImageTo3DProviderKind::Meshy => match config.providers.meshy_api_key.clone() {
+            Some(api_key) => Arc::new(MeshyImageTo3DProvider::new(api_key)),
+            None => Arc::new(UnavailableImageTo3DProvider::new(
+                "MESHY_API_KEY is not configured; image-to-3D generation is unavailable",
+            )),
+        },
     };
     let pipeline = Pipeline::new(
         repository.clone(),
@@ -62,6 +72,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         ))
         .with_state(admin_state);
     let app = Router::new()
+        .route("/", get(routes::root::landing_page))
         .route("/health", get(routes::health::health_check))
         .merge(videos_router)
         .merge(admin_router);

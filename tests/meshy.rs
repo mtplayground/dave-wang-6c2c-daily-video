@@ -236,8 +236,8 @@ fn provider_kind_is_selected_from_config() {
     let config = ProviderConfig {
         video_provider: "gemini_veo".to_owned(),
         image_to_3d_provider: "meshy".to_owned(),
-        gemini_api_key: "gemini-key".to_owned(),
-        meshy_api_key: "meshy-key".to_owned(),
+        gemini_api_key: Some("gemini-key".to_owned()),
+        meshy_api_key: Some("meshy-key".to_owned()),
     };
 
     assert_eq!(
