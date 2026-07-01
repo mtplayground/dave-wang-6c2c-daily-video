@@ -1,10 +1,11 @@
-use std::{error::Error, net::SocketAddr};
+use std::error::Error;
 
 use axum::{Router, routing::get};
 use tokio::{net::TcpListener, signal};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
+mod config;
 mod routes {
     pub mod health;
 }
@@ -13,8 +14,9 @@ mod routes {
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     init_tracing();
 
+    let config = config::Config::from_env()?;
     let app = Router::new().route("/health", get(routes::health::health_check));
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let addr = config.server.socket_addr();
     let listener = TcpListener::bind(addr).await?;
 
     info!(%addr, "starting HTTP server");
