@@ -10,9 +10,11 @@ use std::{
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use tokio::time::sleep;
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
+    error::{classify_provider_message, ErrorCategory, FailureRecord},
     media::{
         assemble::{assemble_final_mp4_with_options, AssemblyError, AssemblyOptions},
         frame::{extract_representative_frame_with_options, FrameExtractionError, FrameExtractionOptions},
@@ -294,6 +296,7 @@ impl Pipeline {
         let animal = animal_slug(rotation.current_animal);
         let run = self.repo.create_run(date, &animal).await?;
 
+        info!(run_id = %run.id, date = %date, animal = %animal, "created daily pipeline run");
         self.resume_run(run.id).await
     }
 
@@ -303,6 +306,7 @@ impl Pipeline {
         };
 
         if run.status == RunStatus::Complete {
+            info!(%run_id, "pipeline run is already complete");
             return Ok(PipelineRunOutcome {
                 run,
                 published_video: None,
@@ -316,6 +320,15 @@ impl Pipeline {
         let animal = parse_animal_slug(&run.animal)?;
         let mut context = PipelineContext::new(paths, animal);
 
+        info!(
+            %run_id,
+            date = %run.date,
+            animal = %run.animal,
+            status = ?run.status,
+            start_step = ?PipelineStep::ORDERED.get(start_index),
+            "resuming pipeline run"
+        );
+
         for step in &PipelineStep::ORDERED[start_index..] {
             self.mark_step_started(&mut run, *step).await?;
 
@@ -327,6 +340,7 @@ impl Pipeline {
             self.repo
                 .upsert_step_state(run.id, *step, PipelineStepStatus::Complete, None)
                 .await?;
+            info!(%run_id, step = ?step, "pipeline step completed");
         }
 
         let complete_run = self
@@ -342,6 +356,7 @@ impl Pipeline {
             )
             .await?;
 
+        info!(%run_id, "pipeline run completed");
         Ok(PipelineRunOutcome {
             run: complete_run,
             published_video: context.published_video,
@@ -349,6 +364,7 @@ impl Pipeline {
     }
 
     async fn mark_step_started(&self, run: &mut Run, step: PipelineStep) -> Result<(), PipelineError> {
+        info!(run_id = %run.id, step = ?step, "pipeline step started");
         let updated_run = self
             .repo
             .update_run_status(
@@ -376,7 +392,16 @@ impl Pipeline {
         step: PipelineStep,
         error: &PipelineError,
     ) -> Result<(), PipelineError> {
-        let message = error.to_string();
+        let failure = error.failure_record();
+        let message = failure.persistable_message();
+
+        error!(
+            run_id = %run.id,
+            step = ?step,
+            category = %failure.category,
+            error = %failure.message,
+            "pipeline step failed"
+        );
 
         self.repo
             .upsert_step_state(run.id, step, PipelineStepStatus::Failed, Some(&message))
@@ -417,12 +442,29 @@ impl Pipeline {
 
     async fn generate_video(&self, run: &Run, context: &mut PipelineContext) -> Result<(), PipelineError> {
         let prompt = build_funny_video_prompt(context.animal);
+        info!(
+            run_id = %run.id,
+            animal = ?context.animal,
+            provider_step = "submit_video_prompt",
+            "submitting video provider request"
+        );
         let job = self
             .video_provider
             .submit_prompt(VideoGenerationRequest::new(prompt))
             .await?;
 
+        info!(
+            run_id = %run.id,
+            provider_job_id = %job.provider_job_id,
+            provider = %job.provider,
+            "video provider job submitted"
+        );
         self.wait_for_video_job(&job).await?;
+        info!(
+            run_id = %run.id,
+            provider_job_id = %job.provider_job_id,
+            "downloading generated video clip"
+        );
         let clip = self.video_provider.download_clip(&job).await?;
 
         fs::write(&context.paths.raw_video, &clip.bytes)?;
@@ -444,7 +486,15 @@ impl Pipeline {
     async fn wait_for_video_job(&self, job: &VideoJob) -> Result<(), PipelineError> {
         for attempt in 0..self.poll_options.max_attempts {
             match self.video_provider.poll_job(job).await? {
-                VideoJobStatus::Complete => return Ok(()),
+                VideoJobStatus::Complete => {
+                    info!(
+                        provider = %job.provider,
+                        provider_job_id = %job.provider_job_id,
+                        attempts = attempt + 1,
+                        "video provider job completed"
+                    );
+                    return Ok(());
+                }
                 VideoJobStatus::Failed { message } => {
                     return Err(PipelineError::ProviderFailed {
                         step: PipelineStep::GenerateVideo,
@@ -493,12 +543,28 @@ impl Pipeline {
             .storage
             .public_url(&frame.relative_key, SIGNED_FRAME_URL_TTL)
             .await?;
+        info!(
+            run_id = %run.id,
+            provider_step = "submit_image_to_3d",
+            "submitting image-to-3d provider request"
+        );
         let job = self
             .image_to_3d_provider
             .submit_image(ImageTo3DRequest::new(image_url))
             .await?;
 
+        info!(
+            run_id = %run.id,
+            provider_job_id = %job.provider_job_id,
+            provider = %job.provider,
+            "image-to-3d provider job submitted"
+        );
         self.wait_for_image_to_3d_job(&job).await?;
+        info!(
+            run_id = %run.id,
+            provider_job_id = %job.provider_job_id,
+            "downloading generated GLB"
+        );
         let model = self.image_to_3d_provider.download_glb(&job).await?;
         self.persist_glb(run, context, model).await
     }
@@ -532,7 +598,15 @@ impl Pipeline {
     async fn wait_for_image_to_3d_job(&self, job: &ImageTo3DJob) -> Result<(), PipelineError> {
         for attempt in 0..self.poll_options.max_attempts {
             match self.image_to_3d_provider.poll_job(job).await? {
-                ImageTo3DJobStatus::Complete => return Ok(()),
+                ImageTo3DJobStatus::Complete => {
+                    info!(
+                        provider = %job.provider,
+                        provider_job_id = %job.provider_job_id,
+                        attempts = attempt + 1,
+                        "image-to-3d provider job completed"
+                    );
+                    return Ok(());
+                }
                 ImageTo3DJobStatus::Failed { message } => {
                     return Err(PipelineError::ProviderFailed {
                         step: PipelineStep::ImageTo3D,
@@ -862,6 +936,31 @@ impl Error for PipelineError {
     }
 }
 
+impl PipelineError {
+    pub fn category(&self) -> ErrorCategory {
+        match self {
+            Self::Repo(_) => ErrorCategory::Repository,
+            Self::Storage(_) => ErrorCategory::Storage,
+            Self::VideoProvider(error) => classify_provider_message(&error.to_string()),
+            Self::ImageTo3DProvider(error) => match classify_provider_message(&error.to_string()) {
+                ErrorCategory::VideoProvider => ErrorCategory::ImageTo3DProvider,
+                category => category,
+            },
+            Self::Frame(_) | Self::Render(_) | Self::Assembly(_) => ErrorCategory::Media,
+            Self::Io(_) => ErrorCategory::Io,
+            Self::RunNotFound(_) => ErrorCategory::NotFound,
+            Self::InvalidAnimal(_) | Self::InvalidRunState(_) | Self::MissingLocalFile { .. }
+            | Self::MissingArtifact { .. } => ErrorCategory::InvalidState,
+            Self::ProviderFailed { message, .. } => classify_provider_message(message),
+            Self::ProviderTimeout { .. } => ErrorCategory::ProviderTimeout,
+        }
+    }
+
+    pub fn failure_record(&self) -> FailureRecord {
+        FailureRecord::new(self.category(), self.to_string())
+    }
+}
+
 impl From<RepoError> for PipelineError {
     fn from(error: RepoError) -> Self {
         Self::Repo(error)
@@ -1027,4 +1126,14 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn provider_timeout_failure_record_is_categorized_for_persistence() {
+        let error = PipelineError::ProviderTimeout {
+            step: PipelineStep::GenerateVideo,
+        };
+
+        let record = error.failure_record();
+        assert_eq!(record.category, ErrorCategory::ProviderTimeout);
+        assert!(record.persistable_message().starts_with("[provider_timeout]"));
+    }
 }
