@@ -1,22 +1,10 @@
 use std::error::Error;
 
 use axum::{Router, routing::get};
+use dave_wang_6c2c_daily_video::{config, db, routes};
 use tokio::{net::TcpListener, signal};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
-
-mod config;
-mod db;
-mod models {
-    pub mod artifact;
-    pub mod rotation;
-    pub mod run;
-    pub mod video;
-}
-mod routes {
-    pub mod health;
-}
-mod storage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
