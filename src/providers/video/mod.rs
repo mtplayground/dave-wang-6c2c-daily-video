@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{config::ProviderConfig, models::rotation::RotationAnimal};
 
+pub mod veo;
+
+pub use veo::VeoVideoProvider;
+
 pub const DEFAULT_VIDEO_DURATION_SECONDS: u16 = 8;
 pub const DEFAULT_VIDEO_ASPECT_RATIO: &str = "9:16";
 pub const DEFAULT_VIDEO_PROVIDER: VideoProviderKind = VideoProviderKind::GeminiVeo;
